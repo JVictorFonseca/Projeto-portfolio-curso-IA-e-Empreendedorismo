@@ -125,7 +125,7 @@ class RAGPipeline:
         
         model_name = os.environ.get("CHEAP_MODEL", "gemini-2.5-flash-lite")
         
-        # Primeira chamada ao LLM para verificar se ele quer acionar a Tool de Bancas (TODO 4)
+   # Primeira chamada ao LLM para verificar se ele quer acionar a Tool de Bancas (TODO 4)
         response = self.client.chat.completions.create(
             model=model_name,
             messages=messages,
@@ -133,10 +133,12 @@ class RAGPipeline:
         )
         
         response_message = response.choices[0].message
+        
+        # CORREÇÃO: Verificação segura para tool_calls
         tool_calls = getattr(response_message, "tool_calls", None)
         
         # Executa a ferramenta caso a IA decida usá-la
-        if tool_calls:
+        if tool_calls and isinstance(tool_calls, list) and len(tool_calls) > 0:
             messages.append(response_message)
             for tool_call in tool_calls:
                 func_name = tool_call.function.name
@@ -149,7 +151,7 @@ class RAGPipeline:
                         "role": "tool",
                         "tool_call_id": tool_call.id,
                         "name": func_name,
-                        "content": tool_output
+                        "content": str(tool_output) # Garantir que o conteúdo seja string
                     })
             
             # Segunda chamada para consolidar o relatório final
@@ -159,13 +161,14 @@ class RAGPipeline:
             )
             final_answer = response.choices[0].message.content
         else:
+            # Caso não haja tool_calls, apenas pega o conteúdo gerado
             final_answer = response_message.content
 
         # Estrutura o retorno com as referências das páginas
         sources = [(b["source"], b["page"]) for b in context_blocks]
         return {
             "answer": final_answer,
-            "sources": list(set(sources))  # Remove duplicatas de páginas idênticas
+            "sources": list(set(sources)) 
         }
 
 
