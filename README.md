@@ -88,7 +88,7 @@ A interface foi desenhada para ser intuitiva e simular a mesa de estudos de um c
 ### Passo 1: Alimentar a Base de Conhecimento (Upload)
 O Mentor precisa de material base para analisar. 
 1. Na barra lateral esquerda, localize a seção **"Alimentar o Mentor"**.
-2. Arraste e solte arquivos PDF (como o edital do TCE/RN, provas anteriores do CEBRASPE ou manuais de critérios da banca) na área de upload.
+2. Arraste e solte arquivos PDF (como o edital de um concurso, provas anteriores ou manuais de critérios da banca) na área de upload.
 3. O sistema fará a ingestão, dividirá o texto em fragmentos (chunks) e atualizará automaticamente o contador **"Chunks indexados"**.
 
 ### Passo 2: Consultar o Mentor
@@ -107,3 +107,30 @@ Na barra lateral, você pode acompanhar a eficiência da arquitetura em tempo re
 * **Exact cache:** Conta quantas perguntas foram respondidas instantaneamente por serem idênticas a consultas anteriores.
 * **Semantic cache:** Mostra respostas recuperadas por similaridade de intenção (ex: "estilo da banca" vs. "como a banca cobra").
 * Caso precise resetar a memória para um novo ciclo de estudos, basta clicar no botão **"Limpar caches"**.
+
+## ✅ 7. Critérios de Aceitação (Acceptance Criteria)
+
+Para garantir que o Mentor Concurso entregue valor real e confiável aos candidatos, o sistema foi validado contra os seguintes critérios de aceitação:
+
+### 📥 1. Ingestão e Processamento de Documentos
+* **Dado que** o usuário arrasta manuais ou provas em PDF (ex: critérios do CEBRASPE) para a interface,
+* **Quando** o upload é concluído,
+* **Então** o sistema deve extrair o texto, dividi-lo em blocos (chunks) mantendo o contexto semântico, indexá-los no banco vetorial (ChromaDB) e atualizar imediatamente o contador de métricas na tela.
+
+### 🎯 2. Recuperação de Informação e Mitigação de Alucinação (RAG)
+* **Dado que** o usuário faz uma pergunta técnica sobre o estilo de cobrança ou conteúdo do edital,
+* **Quando** o pipeline RAG é acionado,
+* **Então** a IA deve buscar os trechos mais relevantes no banco vetorial e formular uma resposta baseada **exclusivamente** nos documentos indexados.
+* **E** o sistema deve listar em um menu expansível o nome exato do arquivo PDF e a página (ex: `cespe-c...-prova.pdf:p4`) de onde a informação foi extraída.
+
+### ⚡ 3. Otimização de Performance e Custos (Cache Duplo)
+* **Dado que** o usuário faz uma pergunta idêntica a uma anterior,
+* **Então** o sistema deve recuperar a resposta do **Cache Exato (SHA256)** instantaneamente, sem acionar a API do LLM.
+* **Dado que** o usuário faz uma pergunta com a mesma intenção de uma anterior, mas usando palavras diferentes (paráfrase),
+* **Então** o sistema deve identificar uma similaridade superior a 93% (via embeddings) e recuperar a resposta do **Cache Semântico**, economizando tokens e reduzindo a latência.
+
+### 🔀 4. Roteamento Inteligente (Routing)
+* **Dado que** a pergunta do usuário possui baixa complexidade (ex: perguntas diretas e objetivas),
+* **Então** o orquestrador deve rotear a requisição para o modelo mais rápido e econômico (`gemini-2.5-flash-lite`).
+* **Dado que** a pergunta exige forte capacidade analítica, comparação entre bancas ou leitura de contextos extensos,
+* **Então** o orquestrador deve acionar automaticamente o modelo de alta capacidade (`gemini-2.5-pro`).
