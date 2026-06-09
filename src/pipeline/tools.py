@@ -27,37 +27,48 @@ from typing import Any, Callable
 
 
 # SEU CODIGO AQUI — TODO 4
-def my_domain_tool(arg1: str) -> str:
-    """Substitua esta funcao pela sua tool especifica.
-
-    A funcao deve receber argumentos primitivos (str, int, float, bool) e
-    retornar string com o resultado (sera passado de volta ao LLM como tool result).
-    """
-    return f"TODO: implementar tool para o argumento: {arg1}"
+def buscar_armadilhas_banca(banca: str) -> str:
+    """Retorna o histórico de armadilhas e o estilo de cobrança de uma banca."""
+    banca = banca.upper().strip()
+    
+    base_conhecimento = {
+        "CEBRASPE": "Estilo Certo/Errado. Uma errada anula uma certa. Foca muito em jurisprudência (STF/STJ) e interpretação profunda. Armadilhas comuns: trocar 'pode' por 'deve', 'prescindível' por 'imprescindível', e usar palavras restritivas como 'apenas', 'somente', 'nunca'.",
+        "FGV": "Textos longos e casos concretos (situações hipotéticas). Em Português, a interpretação de texto e semântica são o foco principal, não a gramática pura. Em Direito, cobra muita literalidade misturada com casos práticos.",
+        "FCC": "Conhecida como 'Fundação Copia e Cola', cobra muita literalidade da lei (lei seca). Armadilhas comuns: trocar prazos, quóruns e autoridades competentes. Em Português, foca bastante em gramática normativa e reescritura de frases.",
+        "VUNESP": "Questões diretas e objetivas. Cobra muita lei seca, mas de forma menos complexa que a FGV. Cuidado com armadilhas nas questões de raciocínio lógico e matemática."
+    }
+    
+    for chave in base_conhecimento:
+        if chave in banca:
+            return base_conhecimento[chave]
+            
+    return f"Não encontrei dados específicos de armadilhas para a banca {banca}. Analise os ficheiros PDF indexados para obter mais detalhes."
 
 
 TOOLS: list[dict[str, Any]] = [
     # SEU CODIGO AQUI — TODO 4 (continuacao)
-    # Adicione o schema JSON da sua tool. Modelo (referencia LAB-001):
-    # {
-    #     "type": "function",
-    #     "function": {
-    #         "name": "my_domain_tool",
-    #         "description": "Descrever o que a tool faz em pt-BR — LLM le isso para decidir quando usar",
-    #         "parameters": {
-    #             "type": "object",
-    #             "properties": {
-    #                 "arg1": {"type": "string", "description": "..."},
-    #             },
-    #             "required": ["arg1"],
-    #         },
-    #     },
-    # },
+    {
+        "type": "function",
+        "function": {
+            "name": "buscar_armadilhas_banca",
+            "description": "Busca o histórico de armadilhas, pegadinhas e o estilo de cobrança de uma banca organizadora de concursos (ex: CEBRASPE, FGV, FCC). Use esta ferramenta sempre que o utilizador perguntar sobre o perfil, truques ou estilo de uma banca.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "banca": {
+                        "type": "string", 
+                        "description": "Nome da banca organizadora do concurso (ex: CEBRASPE, FGV, FCC)."
+                    },
+                },
+                "required": ["banca"],
+            },
+        },
+    },
 ]
 
 
 TOOL_REGISTRY: dict[str, Callable[..., str]] = {
-    # "my_domain_tool": my_domain_tool,
+    "buscar_armadilhas_banca": buscar_armadilhas_banca,
 }
 
 

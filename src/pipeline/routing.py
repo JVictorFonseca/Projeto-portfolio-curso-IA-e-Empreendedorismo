@@ -1,7 +1,4 @@
-"""Model routing cheap-first com fallback.
-
-Reaproveita o notebook 05. Voce vai preencher 1 TODO aqui.
-"""
+"""Model routing cheap-first com fallback."""
 
 from __future__ import annotations
 
@@ -20,22 +17,38 @@ class RouteDecision:
 
 # ------------------------------------------------------------------ TODO 6
 def classify_complexity(query: str) -> RouteDecision:
-    """Classifica complexidade da query para escolher modelo (cheap vs premium).
-
-    Estrategia heuristica simples. Em producao, evoluiria para classifier treinado.
-    """
+    """Classifica complexidade da query para escolher modelo (cheap vs premium)."""
+    
     cheap_model = os.environ.get("CHEAP_MODEL", "gemini-2.5-flash-lite")
     premium_model = os.environ.get("PREMIUM_MODEL", "gemini-2.5-pro")
 
-    # SEU CODIGO AQUI — TODO 6
-    # Implemente heuristica simples para classificar a query como "simple" ou "complex".
-    # Sugestao de regras:
-    #   - len(query) < 60 e query termina em "?" → simple
-    #   - contem palavras como "explique", "compare", "analise", "projete" → complex
-    #   - default → simple
-    # Retorne RouteDecision(model=cheap_model OU premium_model, complexity=..., reason="por que")
-    # Dica: notebook 05, Etapa 5 — Model Routing.
-    raise NotImplementedError("TODO 6: implementar classify_complexity()")
+    query_lower = query.lower()
+    
+    palavras_complexas = [
+        "analise", "compare", "diferença", "explique", 
+        "resuma", "tendência", "perfil", "pegadinha", 
+        "armadilha", "jurisprudência", "profundo"
+    ]
+    
+    if any(palavra in query_lower for palavra in palavras_complexas):
+        return RouteDecision(
+            model=premium_model,
+            complexity="complex",
+            reason="A pergunta exige capacidade de análise, comparação ou síntese profunda."
+        )
+    
+    if len(query) > 100:
+        return RouteDecision(
+            model=premium_model,
+            complexity="complex",
+            reason="A pergunta é longa e possui um contexto extenso."
+        )
+        
+    return RouteDecision(
+        model=cheap_model,
+        complexity="simple",
+        reason="A pergunta é direta e focada, ideal para o modelo rápido."
+    )
 
 
 def make_client() -> OpenAI:

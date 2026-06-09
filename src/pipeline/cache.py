@@ -36,6 +36,10 @@ class ExactCache:
 class SemanticCache:
     """Cache por similaridade de embedding. Captura parafrases (~20% adicional)."""
 
+    def get_stats(self) -> dict:
+        """Retorna o tamanho atual do cache."""
+        return {"size": len(self._answers)}
+    
     def __init__(self, threshold: float = 0.93) -> None:
         self.threshold = threshold
         self._queries: list[str] = []
@@ -63,19 +67,25 @@ class SemanticCache:
         if not self._queries:
             return None
 
-        # SEU CODIGO AQUI — TODO 5
-        # 1. Embedar a query (self._embed)
-        # 2. Calcular similaridade cosseno contra todos self._embeddings:
-        #    cos_sim = np.dot(e, em) / (np.linalg.norm(e) * np.linalg.norm(em))
-        # 3. Pegar idx do maior; se sims[idx] >= self.threshold, retornar self._answers[idx]
-        # 4. Caso contrario, retornar None
-        # Dica: notebook 05, Etapa 4 — Semantic Cache.
-        raise NotImplementedError("TODO 5: implementar SemanticCache.get()")
-
-    def put(self, query: str, answer: str) -> None:
-        self._queries.append(query)
-        self._embeddings.append(self._embed(query))
-        self._answers.append(answer)
-
-    def stats(self) -> dict[str, Any]:
-        return {"size": len(self._queries), "threshold": self.threshold}
+        # 1. Obter o embedding da nova query
+        q_emb = self._embed(query)
+        q_norm = np.linalg.norm(q_emb)
+        
+        best_sim = -1.0
+        best_idx = -1
+        
+        # 2. Calcular similaridade cosseno contra todas as queries anteriores
+        for i, em in enumerate(self._embeddings):
+            em_norm = np.linalg.norm(em)
+            cos_sim = np.dot(q_emb, em) / (q_norm * em_norm)
+            
+            # 3. Guardar o índice do mais similar
+            if cos_sim > best_sim:
+                best_sim = cos_sim
+                best_idx = i
+                
+        # 4. Se a similaridade for maior ou igual ao threshold (0.93 por defeito), devolvemos o cache
+        if best_sim >= self.threshold:
+            return self._answers[best_idx]
+            
+        return None
