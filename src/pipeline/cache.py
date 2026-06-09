@@ -1,7 +1,4 @@
-"""Cache em 2 niveis: exact-match (SHA256) + semantic (cosine similarity).
-
-Reaproveita o notebook 05. Voce vai preencher 1 TODO aqui.
-"""
+"""Cache em 2 niveis: exact-match (SHA256) + semantic (cosine similarity)."""
 
 from __future__ import annotations
 
@@ -30,16 +27,21 @@ class ExactCache:
         self._store[self._key(query)] = answer
 
     def stats(self) -> dict[str, int]:
+        """Mantido por compatibilidade com o template original."""
         return {"size": len(self._store)}
+
+    def get_stats(self) -> dict[str, int]:
+        """Integrado nativamente com a nova barra lateral do Streamlit."""
+        return {"size": len(self._store)}
+
+    def clear(self) -> None:
+        """Limpa o armazenamento do cache exato."""
+        self._store.clear()
 
 
 class SemanticCache:
     """Cache por similaridade de embedding. Captura parafrases (~20% adicional)."""
 
-    def get_stats(self) -> dict:
-        """Retorna o tamanho atual do cache."""
-        return {"size": len(self._answers)}
-    
     def __init__(self, threshold: float = 0.93) -> None:
         self.threshold = threshold
         self._queries: list[str] = []
@@ -56,6 +58,10 @@ class SemanticCache:
         else:
             self._client = OpenAI()
             self._embed_model = "text-embedding-3-small"
+
+    def get_stats(self) -> dict[str, int]:
+        """Retorna o tamanho atual do cache semântico de forma segura."""
+        return {"size": len(self._answers)}
 
     def _embed(self, text: str) -> np.ndarray:
         r = self._client.embeddings.create(model=self._embed_model, input=text)
@@ -77,6 +83,9 @@ class SemanticCache:
         # 2. Calcular similaridade cosseno contra todas as queries anteriores
         for i, em in enumerate(self._embeddings):
             em_norm = np.linalg.norm(em)
+            # Proteção matemática contra divisão por zero
+            if q_norm == 0 or em_norm == 0:
+                continue
             cos_sim = np.dot(q_emb, em) / (q_norm * em_norm)
             
             # 3. Guardar o índice do mais similar
@@ -84,8 +93,28 @@ class SemanticCache:
                 best_sim = cos_sim
                 best_idx = i
                 
-        # 4. Se a similaridade for maior ou igual ao threshold (0.93 por defeito), devolvemos o cache
+        # 4. Se a similaridade for maior ou igual ao threshold (0.93), devolvemos o cache
         if best_sim >= self.threshold:
             return self._answers[best_idx]
             
         return None
+
+    def put(self, query: str, answer: str) -> None:
+        """Adiciona e armazena a nova interação e seu vetor correspondente no cache semântico."""
+        try:
+            # Para evitar duplicar o cálculo caso o 'get' já tenha gerado o embedding,
+            # nós geramos o vetor para arquivamento definitivo
+            q_emb = self._embed(query)
+            
+            self._queries.append(query)
+            self._embeddings.append(q_emb)
+            self._answers.append(answer)
+        except Exception as e:
+            # Fail-silent: falhas no cache semântico não devem quebrar a aplicação principal
+            print(f"Erro ao persistir dados no SemanticCache: {e}")
+
+    def clear(self) -> None:
+        """Limpa as listas indexadas do cache semântico."""
+        self._queries.clear()
+        self._embeddings.clear()
+        self._answers.clear()

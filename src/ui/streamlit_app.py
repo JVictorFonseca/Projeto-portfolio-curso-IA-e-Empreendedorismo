@@ -1,4 +1,4 @@
-"""Streamlit UI — entrada principal do app. Pronta para deploy 1-click no Streamlit Cloud."""
+"""Streamlit UI — entrada principal do app com Upload de PDFs dinâmico."""
 
 from __future__ import annotations
 
@@ -20,6 +20,9 @@ from src.pipeline.cache import ExactCache, SemanticCache  # noqa: E402
 from src.pipeline.rag import build_rag_pipeline  # noqa: E402
 from src.pipeline.routing import classify_complexity  # noqa: E402
 
+# Garante a existência do diretório do Corpus
+CORPUS_DIR = _ROOT / "data" / "corpus"
+CORPUS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------- Streamlit UI
 st.set_page_config(page_title="Mentor Concurso", page_icon=":shield:", layout="centered")
@@ -30,7 +33,7 @@ st.caption("Domine o estilo de cobrança das bancas organizadoras com análise b
 # Inicializacao lazy de pipeline + caches
 @st.cache_resource
 def get_pipeline():
-    return build_rag_pipeline(corpus_dir=str(_ROOT / "data" / "corpus"))
+    return build_rag_pipeline(corpus_dir=str(CORPUS_DIR))
 
 
 @st.cache_resource
@@ -49,12 +52,40 @@ with st.spinner("Inicializando pipeline RAG..."):
     semantic_cache = get_semantic_cache()
 
 
-# Sidebar — metricas e debug
+# Sidebar — upload de arquivos, metricas e debug
 with st.sidebar:
+    st.header("Alimentar o Mentor")
+    
+    # Upload dinâmico via interface gráfica
+    uploaded_files = st.file_uploader(
+        "Suba novos PDFs de bancas/provas:", 
+        type=["pdf"], 
+        accept_multiple_files=True
+    )
+    
+    if uploaded_files:
+        novos_arquivos = False
+        for uploaded_file in uploaded_files:
+            file_path = CORPUS_DIR / uploaded_file.name
+            if not file_path.exists():
+                with open(file_path, "wb") as f:
+                    f.write(uploaded_file.getbuffer())
+                st.success(f"Salvo: {uploaded_file.name}")
+                novos_arquivos = True
+        
+        if novos_arquivos:
+            with st.spinner("Fatiando e indexando novos documentos..."):
+                if hasattr(pipeline, "collection") and pipeline.collection.count() > 0:
+                    try:
+                        pipeline.collection.delete(where={})
+                    except Exception:
+                        pass
+                pipeline.ingest_and_index()
+            st.rerun()
+
     st.header("Métricas do Sistema")
     st.metric("Chunks indexados", pipeline.collection.count())
     
-    # Tratamento seguro para evitar quebra caso o método stats mude
     try:
         exact_size = exact_cache.get_stats()["size"]
     except AttributeError:
@@ -73,54 +104,42 @@ with st.sidebar:
 query = st.text_input("Sua pergunta:", placeholder="Ex: Qual o perfil de pegadinhas do CEBRASPE?")
 
 if query:
-    with trace("query_handle", query=query) as ctx:
-        trace_id = ctx["trace_id"]
+    # Desacoplado do context manager de trace para evitar colisões em caso de erro da API
+    cached = exact_cache.get(query)
+    if cached:
+        st.success("Cache hit (exact)")
+        st.write(cached)
+        st.stop()
 
-        # 1. Exact cache
-        cached = exact_cache.get(query)
-        if cached:
-            st.success("Cache hit (exact)")
-            st.write(cached)
-            log_event("cache_hit", trace_id=trace_id, layer="exact")
-            st.stop()
+    try:
+        cached = semantic_cache.get(query)
+    except NotImplementedError:
+        cached = None
 
-        # 2. Semantic cache
-        try:
-            cached = semantic_cache.get(query)
-        except NotImplementedError:
-            cached = None
-            st.warning("Semantic cache nao implementado (TODO 5). Caindo no LLM real.")
+    if cached:
+        st.success("Cache hit (semantic)")
+        st.write(cached)
+        st.stop()
 
-        if cached:
-            st.success("Cache hit (semantic)")
-            st.write(cached)
-            log_event("cache_hit", trace_id=trace_id, layer="semantic")
-            st.stop()
+    try:
+        decision = classify_complexity(query)
+        st.info(f"Routing Inteligente: Complexidade '{decision.complexity}' -> Usando {decision.model}")
+    except NotImplementedError:
+        st.warning("Routing não configurado.")
 
-        # 3. Pipeline RAG + Routing
-        try:
-            decision = classify_complexity(query)
-            st.info(f"Routing Inteligente: Complexidade '{decision.complexity}' -> Usando {decision.model}")
-            log_event("route_decision", trace_id=trace_id, **decision.__dict__)
-        except NotImplementedError:
-            st.warning("Routing nao implementado (TODO 6). Usando modelo default.")
-
-        try:
-            result = pipeline.answer(query)
-        except NotImplementedError as e:
-            st.error(f"Pipeline nao implementado: {e}")
-            st.info("Implemente TODOs 1-3 em `src/pipeline/rag.py` para destravar.")
-            st.stop()
-
-        # 4. Renderiza + cacheia
+    try:
+        result = pipeline.answer(query)
         st.write(result["answer"])
         if result.get("sources"):
             with st.expander("Fontes citadas no corpus"):
                 for source, page in result["sources"]:
                     st.write(f"- `{source}:p{page}`")
-
+                    
         exact_cache.put(query, result["answer"])
         semantic_cache.put(query, result["answer"])
-        log_event("answer_generated", trace_id=trace_id, sources=len(result.get("sources", [])))
+        
+    except Exception as e:
+        st.error(f"Erro ao processar resposta da pipeline: {e}")
+        st.info("Verifique se sua GEMINI_API_KEY no arquivo .env está correta e completa.")
 
 st.divider()

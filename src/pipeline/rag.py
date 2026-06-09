@@ -1,7 +1,4 @@
-"""RAG pipeline — chunk, embed, index, retrieve, generate.
-
-Reaproveita as funcoes do notebook 02. Voce vai preencher 3 TODOs aqui.
-"""
+"""Pipeline RAG usando ChromaDB e a API do Gemini via OpenAI Client."""
 
 from __future__ import annotations
 
@@ -9,125 +6,168 @@ import os
 from pathlib import Path
 from typing import Any
 
+from pypdf import PdfReader
 import chromadb
-from chromadb.utils.embedding_functions import OpenAIEmbeddingFunction
+from chromadb.utils import embedding_functions
 from openai import OpenAI
+
+from src.observability.trace import trace
+from src.pipeline.tools import TOOL_REGISTRY, TOOLS
 
 
 def _make_client() -> tuple[OpenAI, str]:
-    """Inicializa cliente OpenAI-compatible conforme provider escolhido no .env."""
+    """Cria cliente OpenAI-compatible para o Gemini."""
     if "GEMINI_API_KEY" in os.environ:
-        client = OpenAI(
+        return OpenAI(
             api_key=os.environ["GEMINI_API_KEY"],
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        )
-        embed_api_base = "https://generativelanguage.googleapis.com/v1beta/openai/"
-    elif "OPENAI_API_KEY" in os.environ:
-        client = OpenAI()
-        embed_api_base = None
-    else:
-        raise RuntimeError("Configure GEMINI_API_KEY ou OPENAI_API_KEY no .env")
-    return client, embed_api_base
+        ), "https://generativelanguage.googleapis.com/v1beta/openai/"
+    raise RuntimeError("Configure GEMINI_API_KEY ou OPENAI_API_KEY no .env")
 
 
 class RAGPipeline:
-    """Pipeline RAG end-to-end com Chroma local."""
-
-    def __init__(
-        self,
-        corpus_dir: str = "data/corpus",
-        persist_dir: str = "data/chroma",
-        collection_name: str = "docs",
-        llm_model: str | None = None,
-        embed_model: str | None = None,
-    ) -> None:
-        self.client, embed_api_base = _make_client()
-        self.llm_model = llm_model or os.environ.get("LLM_MODEL", "gemini-2.5-flash-lite")
-        self.embed_model = embed_model or os.environ.get("EMBED_MODEL", "gemini-embedding-001")
-
-        embed_kwargs: dict[str, Any] = {
-            "api_key": os.environ.get("GEMINI_API_KEY") or os.environ.get("OPENAI_API_KEY"),
-            "model_name": self.embed_model,
-        }
-        if embed_api_base:
-            embed_kwargs["api_base"] = embed_api_base
-        self.embed_fn = OpenAIEmbeddingFunction(**embed_kwargs)
-
+    def __init__(self, corpus_dir: str, db_dir: str = ".chromadb"):
         self.corpus_dir = Path(corpus_dir)
-        self.persist_dir = persist_dir
-        self.collection_name = collection_name
-
-        chroma = chromadb.PersistentClient(path=persist_dir)
-        self.collection = chroma.get_or_create_collection(
-            name=collection_name, embedding_function=self.embed_fn
+        self.db_dir = Path(db_dir)
+        
+        self.client, _ = _make_client()
+        self.chroma_client = chromadb.PersistentClient(path=str(self.db_dir))
+        
+        # Usando a função default do Chroma para embeddings locais leves
+        self.emb_fn = embedding_functions.DefaultEmbeddingFunction()
+        self.collection = self.chroma_client.get_or_create_collection(
+            name="concursos_corpus",
+            embedding_function=self.emb_fn
         )
+        
+        # Ingestão inicial se estiver vazio
+        if self.collection.count() == 0:
+            self.ingest_and_index()
 
-    # ------------------------------------------------------------------ TODO 1
-    def ingest_and_index(self) -> int:
-        """Le PDFs de `corpus_dir`, faz chunking e indexa em Chroma.
+    # ============================================================================
+    # TODO 1 — Ingestao (Leitura, Chunking e Indexacao)
+    # ============================================================================
+    def ingest_and_index(self) -> None:
+        """Lê os PDFs do diretório corpus, divide em pedaços e indexa no ChromaDB."""
+        if not self.corpus_dir.exists():
+            return
 
-        Retorna numero de chunks indexados.
+        documents = []
+        metadatas = []
+        ids = []
+        counter = 0
 
-        Ja deixei a estrutura do ciclo. Voce completa as 3 partes marcadas.
-        """
-        # SEU CODIGO AQUI — TODO 1.A
-        # Iterar por todos os PDFs em self.corpus_dir.
-        # Para cada PDF, ler todas as paginas com PdfReader e extrair texto.
-        # Acumular numa lista `docs` com dicts: {"text": str, "source": str, "page": int}
-        # Dica: reaproveite o snippet do notebook 02 (Etapa 1 — Ingestao de PDFs).
-        docs: list[dict] = []
+        for pdf_path in self.corpus_dir.glob("*.pdf"):
+            try:
+                reader = PdfReader(pdf_path)
+                for page_num, page in enumerate(reader.pages, start=1):
+                    text = page.extract_text() or ""
+                    
+                    # Chunking simples por tamanho (fatias de ~800 caracteres)
+                    chunk_size = 800
+                    for i in range(0, len(text), chunk_size - 100):
+                        chunk = text[i:i + chunk_size].strip()
+                        if len(chunk) > 50:
+                            documents.append(chunk)
+                            metadatas.append({
+                                "source": pdf_path.name,
+                                "page": page_num
+                            })
+                            ids.append(f"id_{pdf_path.name}_{counter}")
+                            counter += 1
+            except Exception as e:
+                print(f"Erro ao ler {pdf_path.name}: {e}")
 
-        # SEU CODIGO AQUI — TODO 1.B
-        # Aplicar RecursiveCharacterTextSplitter com chunk_size=800, overlap=100
-        # Quebrar cada doc em chunks e construir lista `chunks` com:
-        # {"id": unique_id, "text": str, "source": str, "page": int}
-        # Dica: reaproveite o notebook 02 (Etapa 2 — Chunking Recursivo).
-        chunks: list[dict] = []
+        if documents:
+            self.collection.add(documents=documents, metadatas=metadatas, ids=ids)
 
-        # SEU CODIGO AQUI — TODO 1.C
-        # Adicionar chunks no Chroma via self.collection.add(ids=, documents=, metadatas=)
-        # Lembre de filtrar metadatas para conter apenas {source, page} (Chroma rejeita listas).
+    # ============================================================================
+    # TODO 2 — Recuperacao (Retrieve)
+    # ============================================================================
+    def retrieve(self, query: str, top_k: int = 3) -> list[dict[str, Any]]:
+        """Busca os trechos de manuais/provas mais relevantes para a dúvida."""
+        results = self.collection.query(
+            query_texts=[query],
+            n_results=top_k
+        )
+        
+        retrieved = []
+        if results and results["documents"] and results["documents"][0]:
+            for doc, meta in zip(results["documents"][0], results["metadatas"][0]):
+                retrieved.append({
+                    "text": doc,
+                    "source": meta.get("source", "Desconhecido"),
+                    "page": meta.get("page", 0)
+                })
+        return retrieved
 
-        return self.collection.count()
+    # ============================================================================
+    # TODO 3 — Geracao Ancorada (Generate)
+    # ============================================================================
+    def answer(self, query: str) -> dict[str, Any]:
+        """Orquestra o RAG: recupera contexto, chama ferramentas e responde via LLM."""
+        # 1. Recupera o contexto dos PDFs
+        context_blocks = self.retrieve(query)
+        context_text = "\n\n".join([f"--- Fonte: {b['source']} (p. {b['page']}) ---\n{b['text']}" for b in context_blocks])
+        
+        # 2. Configura as mensagens do sistema
+        system_prompt = (
+            "Você é um Mentor de Concursos Públicos experiente. Responda à dúvida do candidato "
+            "com base estrita nos documentos fornecidos no contexto abaixo. Se usar informações do contexto, "
+            "cite a fonte e a página no corpo do texto. Caso o usuário pergunte sobre o estilo de uma banca específica, "
+            "use a ferramenta de domínio apropriada disponível."
+        )
+        
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Contexto extraído das provas/manuais:\n{context_text}\n\nPergunta do Candidato: {query}"}
+        ]
+        
+        model_name = os.environ.get("CHEAP_MODEL", "gemini-2.5-flash-lite")
+        
+        # Primeira chamada ao LLM para verificar se ele quer acionar a Tool de Bancas (TODO 4)
+        response = self.client.chat.completions.create(
+            model=model_name,
+            messages=messages,
+            tools=TOOLS if TOOLS else None
+        )
+        
+        response_message = response.choices[0].message
+        tool_calls = getattr(response_message, "tool_calls", None)
+        
+        # Executa a ferramenta caso a IA decida usá-la
+        if tool_calls:
+            messages.append(response_message)
+            for tool_call in tool_calls:
+                func_name = tool_call.function.name
+                if func_name in TOOL_REGISTRY:
+                    import json
+                    args = json.loads(tool_call.function.arguments)
+                    tool_output = TOOL_REGISTRY[func_name](**args)
+                    
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "name": func_name,
+                        "content": tool_output
+                    })
+            
+            # Segunda chamada para consolidar o relatório final
+            response = self.client.chat.completions.create(
+                model=model_name,
+                messages=messages
+            )
+            final_answer = response.choices[0].message.content
+        else:
+            final_answer = response_message.content
 
-    # ------------------------------------------------------------------ TODO 2
-    def retrieve(self, query: str, k: int = 5) -> list[dict]:
-        """Busca top-k chunks similares a query."""
-        # SEU CODIGO AQUI — TODO 2
-        # Usar self.collection.query(query_texts=[query], n_results=k)
-        # Retornar lista de dicts: {"text", "source", "page", "distance"}
-        # Dica: notebook 02, Etapa 4 — Retrieval.
-        raise NotImplementedError("TODO 2: implementar retrieve()")
-
-    # ------------------------------------------------------------------ TODO 3
-    def answer(self, question: str, k: int = 5) -> dict:
-        """Pipeline completo: retrieve + augment + generate. Retorna {answer, sources}."""
-        hits = self.retrieve(question, k=k)
-
-        # SEU CODIGO AQUI — TODO 3
-        # 1. Montar contexto concatenando os textos dos hits com cabecalho [source:page]
-        # 2. Construir prompt com PROMPT_TEMPLATE (definido abaixo)
-        # 3. Chamar self.client.chat.completions.create(model=self.llm_model, ...)
-        # 4. Retornar {"answer": resposta, "sources": [(s, p) for h in hits]}
-        # Dica: notebook 02, Etapa 5 — Augment + Generate.
-        raise NotImplementedError("TODO 3: implementar answer()")
+        # Estrutura o retorno com as referências das páginas
+        sources = [(b["source"], b["page"]) for b in context_blocks]
+        return {
+            "answer": final_answer,
+            "sources": list(set(sources))  # Remove duplicatas de páginas idênticas
+        }
 
 
-PROMPT_TEMPLATE = """Voce e um assistente tecnico. Responda APENAS com base no contexto abaixo.
-Se a informacao nao estiver no contexto, diga "Nao encontrado no corpus".
-Sempre cite a fonte usando o formato [arquivo:pagina].
-
-CONTEXTO:
-{context}
-
-PERGUNTA: {question}
-
-RESPOSTA:"""
-
-
-def build_rag_pipeline(corpus_dir: str = "data/corpus") -> RAGPipeline:
-    """Factory: cria pipeline e indexa corpus se ainda nao indexado."""
-    pipeline = RAGPipeline(corpus_dir=corpus_dir)
-    if pipeline.collection.count() == 0:
-        pipeline.ingest_and_index()
-    return pipeline
+def build_rag_pipeline(corpus_dir: str) -> RAGPipeline:
+    return RAGPipeline(corpus_dir=corpus_dir)
